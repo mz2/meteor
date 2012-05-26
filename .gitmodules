@@ -1,0 +1,3 @@
+[submodule "packages/dalliance"]
+	path = packages/dalliance
+	url = git@github.com:dasmoth/dalliance.git
