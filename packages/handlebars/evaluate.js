@@ -55,6 +55,7 @@ Handlebars.registerHelper = function (name, func) {
   Handlebars._default_helpers[name] = func;
 };
 
+// Utility to HTML-escape a string.
 Handlebars._escape = (function() {
   var escape_map = {
     "<": "&lt;",
@@ -69,10 +70,7 @@ Handlebars._escape = (function() {
   };
 
   return function (x) {
-    // If Handlebars sees an &entity; in the input text, it won't quote
-    // it (won't replace it with &ampentity;). I'm not sure if that's
-    // the right choice -- it's definitely a heuristic..
-    return x.replace(/&(?!\w+;)|[<>"'`]/g, escape_one);
+    return x.replace(/[&<>"'`]/g, escape_one);
   };
 })();
 
@@ -98,7 +96,7 @@ Handlebars.evaluate = function (ast, data, options) {
     if (typeof(id) !== "object")
       return id;
     if (id.length === 2 && id[0] === 0 && (id[1] in helpers))
-      return helpers[id[1]];
+      return helpers[id[1]]; // found helper
     for (var i = 0; i < id[0]; i++) {
       if (!stack.parent)
         throw new Error("Too many '..' segments");
@@ -106,6 +104,27 @@ Handlebars.evaluate = function (ast, data, options) {
         stack = stack.parent;
     }
     var ret = stack.data;
+    if (id.length > 1 && typeof ret !== 'object') {
+      // Fail with better error than "can't read property of undefined".
+      // Looking up id[1] as a property will fail, because
+      // there is no data context object.  Probably the developer
+      // intended to use a helper that doesn't exist.
+      if (typeof (function() {})[id[1]] !== 'undefined') {
+        // An even more specific case for a helpful error.
+        // The developer probably tried to name a helper 'name',
+        // 'length', or some other built-in function property.
+        // Assignments to these properties are no-ops, so the
+        // helper declaration is undetectable.
+        // We can't always catch this mistake, because if there is any
+        // object as data context, it's legal for the developer to
+        // ask for {{name}} as a property of the object, perhaps an
+        // optional one.  But if there is no data context, we get
+        // to be helpful.
+        throw new Error("Can't call a helper '"+id[1]+"' because "+
+                        "it is a built-in function property in JavaScript");
+      }
+      throw new Error("Unknown helper '"+id[1]+"'");
+    }
     for (var i = 1; i < id.length; i++)
       // XXX error (and/or unknown key) handling
       ret = ret[id[i]];
@@ -175,11 +194,22 @@ Handlebars.evaluate = function (ast, data, options) {
       };
     };
 
+    // Handle the return value of a {{helper}}.
+    // Takes a:
+    //   string - escapes it
+    //   SafeString - returns the underlying string unescaped
+    //   other value - coerces to a string and escapes it
+    var maybeEscape = function(x) {
+      if (x instanceof Handlebars.SafeString)
+        return x.toString();
+      return Handlebars._escape(toString(x));
+    };
+
     _.each(elts, function (elt) {
       if (typeof(elt) === "string")
         buf.push(elt);
       else if (elt[0] === '{')
-        buf.push(Handlebars._escape(toString(invoke(stack, elt[1]))));
+        buf.push(maybeEscape(invoke(stack, elt[1])));
       else if (elt[0] === '!')
         buf.push(toString(invoke(stack, elt[1] || '')));
       else if (elt[0] === '#') {
@@ -192,11 +222,11 @@ Handlebars.evaluate = function (ast, data, options) {
           function (data) {
             return template({parent: stack, data: data}, elt[3] || []);
           }, stack.data);
-        buf.push(invoke(stack, elt[1], block));
+        buf.push(toString(invoke(stack, elt[1], block)));
       } else if (elt[0] === '>') {
         if (!(elt[1] in partials))
           throw new Error("No such partial '" + elt[1] + "'");
-        buf.push(partials[elt[1]](stack.data));
+        buf.push(toString(partials[elt[1]](stack.data)));
       } else
         throw new Error("bad element in template");
     });
@@ -207,3 +237,9 @@ Handlebars.evaluate = function (ast, data, options) {
   return template({data: data, parent: null}, ast);
 };
 
+Handlebars.SafeString = function(string) {
+  this.string = string;
+};
+Handlebars.SafeString.prototype.toString = function() {
+  return this.string.toString();
+};
